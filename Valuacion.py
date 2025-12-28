@@ -10,81 +10,91 @@ st.set_page_config(page_title="GERIE Consulta Valor Inmueble", layout="wide")
 
 st.title("🏠 GERIE: Consulta de Valor Inmueble")
 
-# --- 1. INICIALIZACIÓN DE ESTADO (Para que no desaparezcan los datos) ---
-if 'consulta_realizada' not in st.session_state:
-    st.session_state.consulta_realizada = False
-    st.session_state.datos_propiedad = {}
+# --- 1. ESTADO DE LA SESIÓN ---
+if 'datos' not in st.session_state:
+    st.session_state.datos = None
 
-# --- 2. OBTENCIÓN DE TIPO DE CAMBIO ---
+# --- 2. OBTENCIÓN DE DÓLAR BNA ---
 @st.cache_data(ttl=3600)
 def get_dolar_bna():
     try:
-        response = requests.get("https://dolarapi.com/v1/dolares/oficial")
-        return response.json()['venta']
+        # Buscamos el oficial venta del BNA
+        r = requests.get("https://dolarapi.com/v1/dolares/oficial")
+        return r.json()['venta']
     except:
-        return 850.0
+        return 950.0 # Valor de referencia si falla la API
 
-dolar_bna = get_dolar_bna()
+dolar_act = get_dolar_bna()
 
-def get_market_values(city):
-    data_mercado = {
-        "CABA": {"min": 1800, "max": 3500, "avg": 2400},
-        "default": {"min": 1000, "max": 2000, "avg": 1500}
+# --- 3. LÓGICA DE PRECIOS POR ZONA ---
+def estimar_precios(ciudad):
+    zonas = {
+        "CABA": {"min": 1950, "max": 3800, "avg": 2550},
+        "GBA NORTE": {"min": 1500, "max": 4500, "avg": 2200},
+        "ROSARIO": {"min": 950, "max": 1900, "avg": 1350},
     }
-    return data_mercado.get(city, data_mercado["default"])
+    return zonas.get(ciudad.upper(), {"min": 1100, "max": 2200, "avg": 1600})
 
-# --- 3. BARRA LATERAL ---
+# --- 4. BARRA LATERAL ---
 with st.sidebar:
     st.header("Carga de Datos")
-    direccion = st.text_input("Dirección (Calle y Altura)", "Av. del Libertador 2000")
-    ciudad = st.text_input("Ciudad / Localidad", "CABA")
-    superficie = st.number_input("Superficie Total (m2)", min_value=10, value=50)
+    calle = st.text_input("Dirección (Calle y Altura)", "Los Pirineos 1332")
+    localidad = st.text_input("Ciudad / Localidad", "CABA")
+    m2 = st.number_input("Superficie Total (m2)", min_value=1, value=150)
     
-    # Al hacer clic, activamos el estado
     if st.button("Consultar Valuación"):
-        geolocator = Nominatim(user_agent="gerie_app")
-        full_address = f"{direccion}, {ciudad}, Argentina"
-        location = geolocator.geocode(full_address)
+        geolocator = Nominatim(user_agent="gerie_app_v2")
+        query = f"{calle}, {localidad}, Argentina"
+        location = geolocator.geocode(query)
         
         if location:
-            vals = get_market_values(ciudad)
-            st.session_state.datos_propiedad = {
+            st.session_state.datos = {
                 "lat": location.latitude,
                 "lon": location.longitude,
-                "direccion": direccion,
-                "vals": vals,
-                "superficie": superficie
+                "addr": calle,
+                "precios": estimar_precios(localidad),
+                "m2": m2
             }
-            st.session_state.consulta_realizada = True
         else:
-            st.error("No se encontró la dirección.")
+            st.error("No se encontró la ubicación exacta.")
 
-# --- 4. VISUALIZACIÓN DE RESULTADOS ---
-if st.session_state.consulta_realizada:
-    d = st.session_state.datos_propiedad
-    v = d['vals']
-    sup = d['superficie']
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Mínimo m2", f"US$ {v['min']}")
-    col2.metric("Promedio m2", f"US$ {v['avg']}")
-    col3.metric("Máximo m2", f"US$ {v['max']}")
-
-    st.subheader("Valor Total Estimado")
-    df_vals = pd.DataFrame({
-        "Referencia": ["Mínimo", "Promedio", "Máximo"],
-        "Dólares (USD)": [f"US$ {v['min']*sup:,.0f}", f"US$ {v['avg']*sup:,.0f}", f"US$ {v['max']*sup:,.0f}"],
-        "Pesos (ARS)": [f"$ {v['min']*sup*dolar_bna:,.0f}", f"$ {v['avg']*sup*dolar_bna:,.0f}", f"$ {v['max']*sup*dolar_bna:,.0f}"]
-    })
-    st.table(df_vals)
-
-    # Mapas
-    m = folium.Map(location=[d['lat'], d['lon']], zoom_start=17)
-    folium.Marker([d['lat'], d['lon']], popup=d['direccion']).add_to(m)
-    st_folium(m, width=900, height=400, key="mapa_fijo")
+# --- 5. RESULTADOS ---
+if st.session_state.datos:
+    d = st.session_state.datos
+    p = d['precios']
     
-    # Street View
-    st.markdown(f'<iframe width="100%" height="400" src="https://maps.google.com/maps?q={d["lat"]},{d["lon"]}&layer=c&cbll={d["lat"]},{d["lon"]}&output=svembed"></iframe>', unsafe_allow_html=True)
+    # Métricas principales
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Mínimo m2", f"US$ {p['min']}")
+    c2.metric("Promedio m2", f"US$ {p['avg']}")
+    c3.metric("Máximo m2", f"US$ {p['max']}")
+    
+    # Tabla de valores totales
+    st.subheader("Valuación Total Estimada")
+    v_avg = p['avg'] * d['m2']
+    v_min = p['min'] * d['m2']
+    v_max = p['max'] * d['m2']
+    
+    tabla = pd.DataFrame({
+        "Escenario": ["Mínimo", "Promedio", "Máximo"],
+        "Valor USD": [f"US$ {v_min:,.0f}", f"US$ {v_avg:,.0f}", f"US$ {v_max:,.0f}"],
+        "Valor ARS (BNA)": [f"$ {v_min*dolar_act:,.0f}", f"$ {v_avg*dolar_act:,.0f}", f"$ {v_max*dolar_act:,.0f}"]
+    })
+    st.table(tabla)
+    
+    # --- VISUALIZACIÓN ---
+    col_mapa, col_street = st.columns(2)
+    
+    with col_mapa:
+        st.write("📍 **Ubicación en Mapa**")
+        m = folium.Map(location=[d['lat'], d['lon']], zoom_start=17)
+        folium.Marker([d['lat'], d['lon']]).add_to(m)
+        st_folium(m, width="100%", height=400, key="mapa_final")
+        
+    with col_street:
+        st.write("📷 **Vista de Calle (Street View)**")
+        # Usamos el parámetro 'layer=c' y 'cbll' para forzar Street View
+        sv_url = f"https://www.google.com/maps?q=&layer=c&cbll={d['lat']},{d['lon']}&cbp=11,0,0,0,0&output=svembed"
+        st.markdown(f'<iframe width="100%" height="400" frameborder="0" src="{sv_url}" allowfullscreen></iframe>', unsafe_allow_html=True)
 
-else:
-    st.info("Complete los datos en el panel izquierdo y presione 'Consultar Valuación'.")
+    st.caption(f"Tipo de cambio BNA aplicado: $ {dolar_act}")
