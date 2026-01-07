@@ -1,6 +1,9 @@
 streamlit
 pandas
-geopy
-streamlit-folium
-folium
+geopandas
 requests
+folium
+streamlit-folium
+geopy
+shapely
+pyogrio
