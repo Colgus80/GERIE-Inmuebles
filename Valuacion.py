@@ -1,119 +1,148 @@
 import streamlit as st
 import pandas as pd
-from geopy.geocoders import Nominatim
-from streamlit_folium import st_folium
-import folium
+import geopandas as gpd
 import requests
+import folium
+from geopy.geocoders import Nominatim
+from geopy.distance import geodesic
+from shapely.geometry import Point
+from streamlit_folium import st_folium
 
-# Configuración de página
-st.set_page_config(page_title="GERIE Consulta Valor Inmueble", layout="wide")
-st.title("🏠 GERIE: Consulta de Valor Inmueble")
+# Configuración inicial
+st.set_page_config(page_title="GERIE Consulta Valor Inmueble", layout="wide", page_icon="🏠")
 
-if 'datos' not in st.session_state:
-    st.session_state.datos = None
+# Estilo personalizado
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- 1. BASE DE DATOS FEDERAL (Valores m2 2025) ---
-DATA_ZONAS = {
-    "CABA": {"min": 1850, "max": 3100, "avg": 2150},
-    "GBA NORTE": {"min": 1600, "max": 4200, "avg": 2300},
-    "GBA SUR": {"min": 1100, "max": 2000, "avg": 1450},
-    "GBA OESTE": {"min": 1000, "max": 1800, "avg": 1350},
-    "ROSARIO": {"min": 950, "max": 1900, "avg": 1300},
-    "CORDOBA": {"min": 900, "max": 1800, "avg": 1250},
-    "MENDOZA": {"min": 850, "max": 1700, "avg": 1200},
-    "MAR DEL PLATA": {"min": 1100, "max": 2200, "avg": 1550},
-    "BARILOCHE": {"min": 1800, "max": 3500, "avg": 2400},
-    "SALTA": {"min": 800, "max": 1500, "avg": 1100},
-    "DEFAULT": {"min": 1000, "max": 2000, "avg": 1400}
-}
+# --- FUNCIONES DE DATOS ---
 
-# --- 2. OBTENCIÓN DE TIPO DE CAMBIO BNA ---
 @st.cache_data(ttl=3600)
 def get_dolar_bna():
     try:
-        r = requests.get("https://dolarapi.com/v1/dolares/oficial")
-        return r.json()['venta']
+        response = requests.get("https://dolarapi.com/v1/dolares/oficial")
+        return response.json()['venta']
     except:
-        return 1025.0
+        return 950.0  # Valor de respaldo actualizado
 
-dolar_act = get_dolar_bna()
+@st.cache_data
+def cargar_datos_renabap():
+    # URL oficial de Barrios Populares de Argentina
+    url = "https://datosabiertos.desarrollosocial.gob.ar/dataset/0d50730b-1662-4217-9ef1-37018c1b359f/resource/828292d3-96b4-4b9e-99e5-b1030e466b0a/download/barrios-populares.json"
+    try:
+        gdf = gpd.read_file(url)
+        return gdf
+    except:
+        return None
 
-# --- 3. BARRA LATERAL ---
+def get_market_values(city):
+    # Valores base por m2 (Dólares)
+    data_mercado = {
+        "CABA": {"min": 1800, "max": 3500, "avg": 2400},
+        "GBA NORTE": {"min": 1500, "max": 4500, "avg": 2200},
+        "ROSARIO": {"min": 900, "max": 1900, "avg": 1300},
+        "CORDOBA": {"min": 850, "max": 1800, "avg": 1250},
+        "default": {"min": 1000, "max": 2200, "avg": 1500}
+    }
+    return data_mercado.get(city.upper(), data_mercado["default"])
+
+def calcular_ajuste_entorno(distancia_m):
+    if distancia_m < 150: return 0.70, "Crítico (-30%)"
+    if distancia_m < 350: return 0.85, "Alto (-15%)"
+    if distancia_m < 550: return 0.93, "Moderado (-7%)"
+    return 1.0, "Nulo (0%)"
+
+# --- INTERFAZ PRINCIPAL ---
+
+st.title("🏢 GERIE: Consulta Valor Inmueble")
+st.markdown("### Sistema de Tasación Referencial con Análisis de Entorno")
+
 with st.sidebar:
-    st.header("Carga de Datos Federal")
-    calle = st.text_input("Calle y Altura", "Av. Colón 100")
-    ciudad = st.text_input("Ciudad / Localidad", "Mar del Plata")
-    provincia = st.text_input("Provincia", "Buenos Aires")
-    m2 = st.number_input("Superficie Total (m2)", min_value=1, value=100)
-    
-    if st.button("Consultar Valuación"):
-        geolocator = Nominatim(user_agent="gerie_federal_v3")
-        # Búsqueda flexible en toda Argentina
-        query = f"{calle}, {ciudad}, {provincia}, Argentina"
-        location = geolocator.geocode(query, addressdetails=True)
-        
+    st.header("📍 Parámetros de Consulta")
+    direccion = st.text_input("Dirección y Altura", "Av. del Libertador 2000")
+    ciudad = st.selectbox("Región / Ciudad", ["CABA", "GBA Norte", "Rosario", "Córdoba", "Otros"])
+    superficie = st.number_input("Superficie Total (m2)", min_value=1, value=50)
+    btn_consultar = st.button("CALCULAR VALUACIÓN", use_container_width=True)
+
+dolar_bna = get_dolar_bna()
+
+if btn_consultar:
+    with st.spinner('Analizando datos de mercado y entorno...'):
+        geolocator = Nominatim(user_agent="gerie_app_v1")
+        full_address = f"{direccion}, {ciudad}, Argentina"
+        location = geolocator.geocode(full_address)
+
         if location:
-            # Lógica para asignar zona de precio
-            nombre_ciudad = ciudad.upper()
-            nombre_prov = provincia.upper()
+            lat, lon = location.latitude, location.longitude
             
-            # Buscamos coincidencias en nuestra base de datos
-            precios = DATA_ZONAS["DEFAULT"]
-            for zona in DATA_ZONAS:
-                if zona in nombre_ciudad or zona in nombre_prov:
-                    precios = DATA_ZONAS[zona]
-                    break
+            # 1. Análisis de Riesgo (RENABAP)
+            gdf_barrios = cargar_datos_renabap()
+            dist_min = 99999
+            if gdf_barrios is not None:
+                # Cálculo de distancia al asentamiento más cercano
+                for _, barrio in gdf_barrios.iterrows():
+                    d = geodesic((lat, lon), (barrio.geometry.centroid.y, barrio.geometry.centroid.x)).meters
+                    if d < dist_min: dist_min = d
             
-            st.session_state.datos = {
-                "lat": location.latitude,
-                "lon": location.longitude,
-                "addr": location.address,
-                "zona_detectada": ciudad if ciudad else "Referencia General",
-                "precios": precios,
-                "m2": m2
+            factor_ajuste, impacto_txt = calcular_ajuste_entorno(dist_min)
+            
+            # 2. Cálculos Inmobiliarios
+            base_vals = get_market_values(ciudad)
+            m2_min = base_vals['min'] * factor_ajuste
+            m2_avg = base_vals['avg'] * factor_ajuste
+            m2_max = base_vals['max'] * factor_ajuste # Ajuste global por entorno
+            
+            # 3. Métricas Principales
+            st.subheader("📊 Valores de Mercado por m² (USD)")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Mínimo", f"USD {m2_min:,.0f}")
+            c2.metric("Promedio", f"USD {m2_avg:,.0f}", delta=f"-{impacto_txt}" if factor_ajuste < 1 else None, delta_color="inverse")
+            c3.metric("Máximo", f"USD {m2_max:,.0f}")
+
+            # 4. Valor Total de la Propiedad
+            st.divider()
+            st.subheader("💰 Valor Total Estimado")
+            
+            data_total = {
+                "Moneda": ["Dólares (USD)", f"Pesos (ARS @ {dolar_bna})"],
+                "Valor Mínimo": [f"US$ {m2_min*superficie:,.0f}", f"$ {m2_min*superficie*dolar_bna:,.0f}"],
+                "Valor Promedio": [f"US$ {m2_avg*superficie:,.0f}", f"$ {m2_avg*superficie*dolar_bna:,.0f}"],
+                "Valor Máximo": [f"US$ {m2_max*superficie:,.0f}", f"$ {m2_max*superficie*dolar_bna:,.0f}"]
             }
+            st.table(pd.DataFrame(data_total))
+
+            # 5. Mapas y Entorno
+            st.divider()
+            col_map, col_info = st.columns([2, 1])
+            
+            with col_map:
+                st.subheader("📍 Ubicación")
+                m = folium.Map(location=[lat, lon], zoom_start=16)
+                folium.Marker([lat, lon], popup=direccion, icon=folium.Icon(color='blue')).add_to(m)
+                st_folium(m, height=400, width=None)
+
+            with col_info:
+                st.subheader("🕵️ Análisis de Zona")
+                if dist_min < 550:
+                    st.error(f"**Alerta de Entorno:** Proximidad a barrio popular ({dist_min:.0f}m).")
+                else:
+                    st.success("**Zona Validada:** No se detectan asentamientos críticos en el radio inmediato.")
+                
+                st.info(f"**Tipo de Suelo:** Urbano Consolidad ({ciudad})")
+                
+            # 6. Street View
+            st.subheader("📷 Visualización de Entorno (Street View)")
+            st.markdown(f'<iframe width="100%" height="450" src="https://www.google.com/maps/embed/v1/streetview?key=YOUR_API_KEY_HERE&location={lat},{lon}&heading=210&pitch=10&fov=35" frameborder="0"></iframe>', unsafe_allow_html=True)
+            st.caption("Nota: Si la imagen no carga, es posible que Street View no esté disponible para esta altura exacta.")
+
         else:
-            st.error("No se encontró la ubicación. Verifique los nombres de ciudad y provincia.")
+            st.error("❌ No se encontró la dirección. Intenta agregar la altura o corregir la ciudad.")
 
-# --- 4. RESULTADOS ---
-if st.session_state.datos:
-    d = st.session_state.datos
-    p = d['precios']
-    v_avg, v_min, v_max = p['avg']*d['m2'], p['min']*d['m2'], p['max']*d['m2']
+else:
+    st.info("👋 Bienvenida/o a GERIE. Ingresa una dirección en el panel izquierdo para comenzar el análisis.")
 
-    st.success(f"📍 Ubicación detectada: {d['addr']}")
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Mínimo m2", f"US$ {p['min']}")
-    col2.metric("Promedio m2", f"US$ {p['avg']}")
-    col3.metric("Máximo m2", f"US$ {p['max']}")
-
-    st.subheader("Valuación Patrimonial para Fianza")
-    df = pd.DataFrame({
-        "Escenario": ["Base (Mínimo)", "Mercado (Promedio)", "Premium (Máximo)"],
-        "Dólares (USD)": [f"US$ {v_min:,.0f}", f"US$ {v_avg:,.0f}", f"US$ {v_max:,.0f}"],
-        "Pesos (BNA)": [f"$ {v_min*dolar_act:,.0f}", f"$ {v_avg*dolar_act:,.0f}", f"$ {v_max*dolar_act:,.0f}"]
-    })
-    st.table(df)
-
-    # Indicador para analistas de riesgo
-    st.info(f"💡 **Valor sugerido para fianza (80% del promedio): US$ {v_avg*0.80:,.0f}**")
-
-    # --- MAPAS Y STREET VIEW ---
-    c_mapa, c_street = st.columns(2)
-    with c_mapa:
-        st.write("**Mapa de Ubicación**")
-        m = folium.Map(location=[d['lat'], d['lon']], zoom_start=16)
-        folium.Marker([d['lat'], d['lon']]).add_to(m)
-        st_folium(m, width="100%", height=350, key="mapa_federal")
-    
-    with c_street:
-        st.write("**Street View (Vista de Calle)**")
-        # URL HTTPS corregida para evitar pantalla negra
-        sv_url = f"https://www.google.com/maps/embed/v1/streetview?key=TU_API_KEY&location={d['lat']},{d['lon']}&heading=210&pitch=10&fov=90"
-        
-        # Como no tenemos API Key oficial, usamos el método 'svembed' pero con HTTPS:
-        sv_free = f"https://maps.google.com/maps?q=&layer=c&cbll={d['lat']},{d['lon']}&cbp=11,0,0,0,0&output=svembed"
-        st.markdown(f'<iframe width="100%" height="350" frameborder="0" src="{sv_free}" allowfullscreen></iframe>', unsafe_allow_html=True)
-
-    st.caption(f"Cotización Dólar BNA: ${dolar_act} | Valuación estimada según zona: {d['zona_detectada']}")
+st.caption(f"Cotización Dólar BNA: $ {dolar_bna} | Fuente Datos: RENABAP & DolarAPI | © 2024 GERIE Inmuebles")
