@@ -19,7 +19,6 @@ def obtener_cotizacion_bna():
     except: return 1100.0 
 
 def calcular_riesgo_entorno(lat, lon):
-    # Focos críticos de referencia (pueden ampliarse por provincia)
     focos = [
         {"nombre": "La Cava", "lat": -34.4720, "lon": -58.5422},
         {"nombre": "Barrio Itatí / San Jorge", "lat": -34.4600, "lon": -58.5445}
@@ -33,11 +32,9 @@ def calcular_riesgo_entorno(lat, lon):
             nombre_f = f['nombre']
     return dist_min, nombre_f
 
-# 3. INTERFAZ LATERAL (ADAPTADA A DATOS DE ESCRITURA/DOMINIO)
+# 3. INTERFAZ LATERAL
 with st.sidebar:
     st.title("🏦 Admisión de Colateral")
-    st.info("Utilice 'Coordenadas' para datos de escrituras con ubicación imprecisa o zonas rurales.")
-    
     modo_ubicacion = st.radio("Dato disponible:", ["Dirección/Barrio/Localidad", "Coordenadas GPS"])
     
     with st.form("validador_bancario"):
@@ -46,11 +43,7 @@ with st.sidebar:
             "Depósito/Galpón", "Campo Agrícola", "Campo Ganadero"
         ])
         
-        if modo_ubicacion == "Dirección/Barrio/Localidad":
-            entrada_geo = st.text_input("Ubicación (Según Escritura/Propuesta)", placeholder="Ej: Barrio Santa Rita, Boulogne")
-        else:
-            entrada_geo = st.text_input("Latitud, Longitud (Desde Google Maps)", placeholder="-34.4608, -58.5435")
-            
+        entrada_geo = st.text_input("Ubicación / Coordenadas", placeholder="Ej: Calle 123, Luján o -34.4, -58.5")
         provincia = st.selectbox("Provincia", [
             "Buenos Aires", "CABA", "Catamarca", "Chaco", "Chubut", "Córdoba", 
             "Corrientes", "Entre Ríos", "Formosa", "Jujuy", "La Pampa", "La Rioja", 
@@ -82,7 +75,6 @@ if btn:
     if lat:
         dist_f, nombre_f = calcular_riesgo_entorno(lat, lon)
         
-        # Configuración de valores base USD
         config_valuacion = {
             "Casa": {"base": 1500, "es_ha": False},
             "Departamento": {"base": 1850, "es_ha": False},
@@ -93,7 +85,6 @@ if btn:
         }
         
         v_conf = config_valuacion[tipo_inmueble]
-        # Castigo por riesgo solo para urbanos cercanos a focos
         factor_riesgo = 0.65 if (not v_conf["es_ha"] and dist_f < 500) else 1.0
             
         st.session_state.analisis_datos = {
@@ -104,9 +95,9 @@ if btn:
             "ubicacion_nom": entrada_geo
         }
     else:
-        st.error("No se pudo localizar. Se recomienda buscar en Google Maps y usar coordenadas.")
+        st.error("No se pudo localizar. Intente con coordenadas GPS.")
 
-# 5. RESULTADOS Y GOBERNANZA DE DATOS
+# 5. RESULTADOS
 if st.session_state.analisis_datos:
     d = st.session_state.analisis_datos
     
@@ -118,19 +109,16 @@ if st.session_state.analisis_datos:
 
     st.markdown(f"### Análisis de Admisión: {d['tipo']}")
     
-    # Alertas de Riesgo
     if not d['es_ha'] and d['dist'] < 500:
         st.error(f"🚨 **ALERTA DE CUMPLIMIENTO:** Cercanía a {d['barrio']} ({d['dist']:.0f}m).")
     elif not d['es_ha']:
-        st.success(f"✅ **ENTORNO VALIDADO:** Garantía fuera de radios de riesgo detectados.")
+        st.success(f"✅ **ENTORNO VALIDADO:** Garantía fuera de radios de riesgo.")
 
-    # MÉTRICAS
     c1, c2, c3 = st.columns(3)
     c1.metric(f"Valor por {unidad} (USD)", f"USD {m2_promedio:,.0f}", delta=f"({m2_min:,.0f} - {m2_max:,.0f})", delta_color="off")
     c2.metric("Valor Total (USD)", f"USD {total_usd:,.0f}")
     c3.metric("Dólar BNA", f"$ {d['dolar']}")
 
-    # PANEL PESOS
     st.markdown(f"""
         <div style="background-color:#f8f9fa; padding:25px; border-radius:15px; text-align:center; border: 2px solid #e9ecef; margin: 20px 0;">
             <h2 style="margin:0; color:#343a40;">Valor Proyectado en Pesos (Oficial BNA)</h2>
@@ -138,10 +126,9 @@ if st.session_state.analisis_datos:
         </div>
     """, unsafe_allow_html=True)
 
-    # MAPA Y SATÉLITE
     col1, col2 = st.columns(2)
     with col1:
-        st.write("**Visualización Geográfica**")
+        st.write("**Mapa Técnico**")
         zoom_lv = 14 if d['es_ha'] else 17
         m = folium.Map(location=[d['lat'], d['lon']], zoom_start=zoom_lv)
         folium.Marker([d['lat'], d['lon']]).add_to(m)
@@ -149,22 +136,17 @@ if st.session_state.analisis_datos:
             folium.Circle([d['lat'], d['lon']], radius=500, color="red", fill=True, opacity=0.1).add_to(m)
         st_folium(m, height=400, width=None, key="mapa_final")
     with col2:
-        st.write("**Referencia de Catastro/Imagen Satelital**")
+        st.write("**Referencia Visual**")
         st.markdown(f'<iframe width="100%" height="400" frameborder="0" src="https://maps.google.com/maps?q={d["lat"]},{d["lon"]}&z={zoom_lv}&output=embed"></iframe>', unsafe_allow_html=True)
 
     # 6. PIE DE CONSULTA: FUENTES Y METODOLOGÍA
     st.markdown("---")
-    with st.expander("📄 Gobernanza de Datos y Metodología"):
-        st.markdown("""
-        **Fuentes de Información:**
-        * **Divisas:** Cotización oficial del Banco Nación Argentina (BNA) vía *DolarApi.com*.
-        * **Geolocalización:** *OpenStreetMap* y motores geodésicos *Geopy* (Elipsoide WGS-84).
-        * **Riesgo Social:** Base de Barrios Populares (*RENABAP*).
-        
-        **Metodología de Valuación:**
-        * **Urbanos:** Valores promedio basados en series históricas de *Zonaprop* y *Reporte Inmobiliario*. El rango (±15%) contempla variaciones de estado de conservación no verificadas.
-        * **Rurales:** Valores por Hectárea de referencia para Región Pampeana y Litoral.
-        * **Castigo por Entorno:** Se aplica un factor de mitigación del 0.65 (35% de descuento) sobre el valor base en zonas urbanas con cercanía crítica (<500m) a asentamientos, por considerar baja liquidez de reventa.
-        
-        *Este reporte es una herramienta de pre-calificación y no reemplaza la tasación de un perito matriculado.*
-        """)
+    st.markdown("""
+    **Fuentes de Información y Metodología:**
+    * **Divisas:** Cotización oficial Banco Nación Argentina (BNA).
+    * **Cartografía:** Motores geodésicos Geopy (Elipsoide WGS-84).
+    * **Valores de Referencia:** Promedios de mercado basados en datos de *CAIR* (rurales), *Reporte Inmobiliario* y portales de oferta masiva (urbanos).
+    * **Castigo por Entorno:** Factor de mitigación 0.65 (35% descuento) en radios urbanos <500m de asentamientos (RENABAP).
+    
+    *Este reporte es una herramienta de pre-calificación inicial y no reemplaza la tasación de un perito matriculado.*
+    """)
