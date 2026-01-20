@@ -34,7 +34,7 @@ def calcular_riesgo_entorno(lat, lon):
 
 # 3. INTERFAZ LATERAL
 with st.sidebar:
-    st.title("🏦 Carga de Inmueble a Computar")
+    st.title("🏦 Inmueble a Computar")
     modo_ubicacion = st.radio("Dato disponible:", ["Dirección/Barrio/Localidad", "Coordenadas GPS"])
     
     with st.form("validador_bancario"):
