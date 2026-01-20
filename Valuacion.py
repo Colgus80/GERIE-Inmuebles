@@ -54,7 +54,7 @@ with st.sidebar:
         label_sup = "Superficie (Hectáreas)" if "Campo" in tipo_inmueble else "Superficie (m²)"
         superficie = st.number_input(label_sup, value=1.0, min_value=0.1)
         
-        btn = st.form_submit_button("ANALIZAR PROPUESTA")
+        btn = st.form_submit_button("ESTIMAR VALUACIÓN")
 
 # 4. PROCESAMIENTO
 if btn:
