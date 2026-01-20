@@ -5,7 +5,7 @@ from geopy.distance import geodesic
 from streamlit_folium import st_folium
 
 # 1. CONFIGURACIÓN
-st.set_page_config(page_title="GERIE - Admisión de Garantías", layout="wide")
+st.set_page_config(page_title="GERIE - Inmueble a computar", layout="wide")
 
 if 'analisis_datos' not in st.session_state:
     st.session_state.analisis_datos = None
@@ -34,7 +34,7 @@ def calcular_riesgo_entorno(lat, lon):
 
 # 3. INTERFAZ LATERAL
 with st.sidebar:
-    st.title("🏦 Admisión de Colateral")
+    st.title("🏦 Carga de Inmueble a Computar")
     modo_ubicacion = st.radio("Dato disponible:", ["Dirección/Barrio/Localidad", "Coordenadas GPS"])
     
     with st.form("validador_bancario"):
