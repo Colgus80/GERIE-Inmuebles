@@ -6,62 +6,72 @@ from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
 from streamlit_folium import st_folium
 
-# --- 1. CONFIGURACIÓN DEL SISTEMA EXPERTO ---
-st.set_page_config(page_title="GERIE PRO - Valuador Bancario", layout="wide", initial_sidebar_state="expanded")
+# --- 1. CONFIGURACIÓN DEL SISTEMA ---
+st.set_page_config(page_title="GERIE EXPERT - Valuación Inteligente", layout="wide")
 
-# Inyección de CSS para estética financiera profesional
+# CSS Profesional para Reportes
 st.markdown("""
     <style>
-    .metric-card {background-color: #f8f9fa; border-left: 5px solid #1f77b4; padding: 15px; border-radius: 5px; margin-bottom: 10px;}
-    .risk-alert {background-color: #ffebee; border: 1px solid #ffcdd2; padding: 10px; border-radius: 5px; color: #b71c1c;}
-    .safe-zone {background-color: #e8f5e9; border: 1px solid #c8e6c9; padding: 10px; border-radius: 5px; color: #1b5e20;}
+    .report-box {padding: 20px; border-radius: 10px; border: 1px solid #ddd; background-color: #fdfdfd;}
+    .premium-tag {background-color: #ffd700; color: #000; padding: 5px 10px; border-radius: 5px; font-weight: bold; font-size: 0.8em;}
+    .alert-tag {background-color: #ffcdd2; color: #b71c1c; padding: 5px 10px; border-radius: 5px; font-weight: bold; font-size: 0.8em;}
     </style>
 """, unsafe_allow_html=True)
 
-# Inicialización de Variables de Sesión (Persistencia)
 if 'coords' not in st.session_state:
-    st.session_state.coords = [-34.6037, -58.3816] # Default: Obelisco
+    st.session_state.coords = [-34.6037, -58.3816]
 if 'zoom' not in st.session_state:
-    st.session_state.zoom = 12
-if 'valuacion_data' not in st.session_state:
-    st.session_state.valuacion_data = None
+    st.session_state.zoom = 13
+if 'perfil_sugerido' not in st.session_state:
+    st.session_state.perfil_sugerido = "Media"
 
-# --- 2. MOTORES DE DATOS EN TIEMPO REAL ---
+# --- 2. MOTORES DE INTELEGENCIA DE DATOS ---
 
 @st.cache_data(ttl=3600)
 def get_dolar_bna():
-    """Obtiene cotización oficial BNA (Venta) para conversión normativa."""
     try:
-        r = requests.get("https://dolarapi.com/v1/dolares/oficial", timeout=5)
+        r = requests.get("https://dolarapi.com/v1/dolares/oficial")
         return r.json()['venta']
-    except:
-        return 1150.0 # Fallback conservador
+    except: return 1150.0
 
-def get_valor_base_m2(tipo, zona_calidad):
+def detectar_perfil_zona(direccion, localidad, provincia):
     """
-    MATRIZ DE VALUACIÓN HEURÍSTICA 2026.
-    Ajusta el valor base según la tipología y la categoría socioeconómica de la zona.
+    Motor Heurístico: Determina el perfil socioeconómico basado en 
+    Corredores Inmobiliarios y Localidades Clave.
     """
-    # Matriz de Precios Referenciales (USD/m2) - Fuente: Relevamiento de Mercado
-    precios = {
-        "Casa": {"Premium": 2100, "Alta": 1600, "Media": 1200, "Baja": 850},
-        "Departamento": {"Premium": 2800, "Alta": 2200, "Media": 1650, "Baja": 1100},
-        "Local Comercial": {"Premium": 3500, "Alta": 2500, "Media": 1800, "Baja": 1000},
-        "Depósito/Galpón": {"Premium": 1200, "Alta": 900, "Media": 650, "Baja": 400}
-    }
-    return precios.get(tipo, {}).get(zona_calidad, 1000)
+    dir_u = direccion.upper()
+    loc_u = localidad.upper()
+    
+    # 1. NIVEL PREMIUM (Top Tier)
+    keywords_premium = [
+        "LIBERTADOR", "FIGUEROA ALCORTA", "ALVEAR", "PUERTO MADERO", 
+        "NORDELTA", "BARRIO PARQUE", "LOMAS DE SAN ISIDRO", "LA HORQUETA",
+        "ESTANCIA ABRIL", "HIGHLAND", "TORTUGAS"
+    ]
+    if any(k in dir_u for k in keywords_premium) or any(k in loc_u for k in keywords_premium):
+        return "Premium"
+    
+    # 2. NIVEL ALTO (Zonas Consolidadas)
+    keywords_alta = [
+        "RECOLETA", "BELGRANO R", "PALERMO CHICO", "VICENTE LOPEZ", 
+        "OLIVOS (BAJO)", "MARTINEZ (VIAS A RIO)", "SAN ISIDRO (CENTRO)",
+        "COUNTRY", "BARRIO CERRADO", "CLUB DE CAMPO"
+    ]
+    if any(k in loc_u for k in keywords_alta) or "MAIPU" in dir_u or "SANTA FE" in dir_u:
+        return "Alta"
+    
+    # 3. NIVEL MEDIO (Estándar)
+    # Por defecto, la mayoría de los barrios consolidados caen aquí.
+    return "Media"
 
 def analizar_riesgo_geo(lat, lon):
-    """Motor de detección de riesgo por proximidad a asentamientos precarios."""
-    # Base de datos simplificada de focos de riesgo (Ejemplo GBA Norte/Oeste/Sur)
-    # En producción, esto se conectaría a la base completa del RENABAP
+    # Base de focos ampliada para el ejemplo
     focos = [
+        {"nombre": "Villa 31 (Retiro)", "lat": -34.5846, "lon": -58.3794}, 
         {"nombre": "La Cava (San Isidro)", "lat": -34.4720, "lon": -58.5422},
-        {"nombre": "Barrio Itatí (San Fernando)", "lat": -34.4600, "lon": -58.5445},
-        {"nombre": "Villa 31 (Retiro)", "lat": -34.5833, "lon": -58.3786},
-        {"nombre": "Fuerte Apache", "lat": -34.6225, "lon": -58.5392},
-        {"nombre": "Villa La Rana", "lat": -34.5668, "lon": -58.5577},
-        {"nombre": "Carlos Gardel", "lat": -34.6335, "lon": -58.5750}
+        {"nombre": "Itatí (San Fernando)", "lat": -34.4600, "lon": -58.5445},
+        {"nombre": "Villa 1-11-14", "lat": -34.6496, "lon": -58.4363},
+        {"nombre": "Fuerte Apache", "lat": -34.6225, "lon": -58.5392}
     ]
     
     dist_min = 99999
@@ -71,173 +81,160 @@ def analizar_riesgo_geo(lat, lon):
         if d < dist_min:
             dist_min = d
             nombre_f = f['nombre']
-    
     return dist_min, nombre_f
 
-# --- 3. INTERFAZ DE CONTROL (SIDEBAR) ---
-with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2830/2830289.png", width=50)
-    st.title("GERIE PRO")
-    st.markdown("**Sistema de Valuación de Garantías**")
-    st.markdown("---")
-    
-    with st.form("panel_control"):
-        st.subheader("1. Ubicación y Tipología")
-        # Datos geográficos
-        direccion = st.text_input("Calle y Altura", value="Av. Rolón 1300")
-        localidad = st.text_input("Barrio / Localidad", value="Beccar")
-        provincia = st.selectbox("Provincia", ["Buenos Aires", "CABA", "Córdoba", "Santa Fe", "Mendoza", "Resto del País"])
-        
-        # Datos del activo
-        tipo_inmueble = st.selectbox("Tipo de Inmueble", ["Casa", "Departamento", "Local Comercial", "Depósito/Galpón"])
-        m2 = st.number_input("Superficie Total (m²)", value=100.0, step=1.0)
-        
-        st.subheader("2. Calificación de Zona")
-        st.info("ℹ️ Seleccione el perfil de la zona para ajustar el valor m².")
-        calidad_zona = st.select_slider(
-            "Perfil Socioeconómico / Ubicación",
-            options=["Baja", "Media", "Alta", "Premium"],
-            value="Media",
-            help="Premium: Zonas exclusivas/Country. Alta: Centros consolidados. Media: Barrios estándar. Baja: Periferia/Mixto industrial."
-        )
-        
-        buscar = st.form_submit_button("📍 BUSCAR Y VALUAR")
+def obtener_valor_referencia(tipo, perfil):
+    # Matriz de Precios 2026 (USD/m2) refinada por corredor
+    matriz = {
+        "Casa": {"Premium": 2300, "Alta": 1700, "Media": 1100, "Baja": 700},
+        "Departamento": {"Premium": 3200, "Alta": 2400, "Media": 1600, "Baja": 950},
+        "Local Comercial": {"Premium": 4000, "Alta": 2800, "Media": 1500, "Baja": 800},
+        "Depósito/Galpón": {"Premium": 1100, "Alta": 800, "Media": 500, "Baja": 300}
+    }
+    return matriz.get(tipo, {}).get(perfil, 1000)
 
-# --- 4. LÓGICA DE BÚSQUEDA Y REFINAMIENTO ---
-if buscar:
+# --- 3. INTERFAZ DE CARGA ---
+with st.sidebar:
+    st.header("🏢 GERIE EXPERT")
+    st.markdown("Herramienta de Valuación Bancaria")
+    st.info("El sistema detectará automáticamente si la zona es Premium (ej: Libertador, Puerto Madero).")
+    
+    with st.form("carga_datos"):
+        tipo_inmueble = st.selectbox("Tipo de Inmueble", ["Departamento", "Casa", "Local Comercial", "Depósito/Galpón"])
+        
+        # Inputs de dirección
+        calle = st.text_input("Calle y Altura", value="Av. del Libertador 14000")
+        localidad = st.text_input("Barrio / Localidad", value="Martinez")
+        provincia = st.selectbox("Provincia", ["Buenos Aires", "CABA", "Santa Fe", "Córdoba", "Mendoza", "Resto del País"])
+        
+        m2_total = st.number_input("Superficie Total (m²)", value=85.0)
+        
+        btn_analizar = st.form_submit_button("🔍 ANALIZAR ZONA Y VALOR")
+
+# --- 4. LÓGICA DE DETECCIÓN Y GEOREFERENCIA ---
+if btn_analizar:
+    # 1. Detectar Perfil Socioeconómico por Texto (Heurística)
+    perfil_detectado = detectar_perfil_zona(calle, localidad, provincia)
+    st.session_state.perfil_sugerido = perfil_detectado
+    
+    # 2. Geolocalizar
     try:
-        # Intento de geolocalización automática
-        geo = Nominatim(user_agent="gerie_pro_bank_v10")
-        # Optimizamos la query para evitar el error de Av Rolón
-        query = f"{direccion}, {localidad}, {provincia}, Argentina"
-        loc = geo.geocode(query, timeout=10)
+        geo = Nominatim(user_agent="gerie_expert_v12")
+        query = f"{calle}, {localidad}, {provincia}, Argentina"
+        loc = geo.geocode(query)
         
         if loc:
             st.session_state.coords = [loc.latitude, loc.longitude]
             st.session_state.zoom = 16
-            st.toast(f"Ubicación encontrada: {loc.address}", icon="✅")
         else:
-            st.error("No se encontró la altura exacta. Se centrará en la localidad.")
-            # Fallback a localidad
-            loc_general = geo.geocode(f"{localidad}, {provincia}, Argentina")
-            if loc_general:
-                st.session_state.coords = [loc_general.latitude, loc_general.longitude]
+            st.warning("Dirección exacta no encontrada. Se mostrará el centro de la localidad para ajuste manual.")
+            loc_gen = geo.geocode(f"{localidad}, {provincia}, Argentina")
+            if loc_gen:
+                st.session_state.coords = [loc_gen.latitude, loc_gen.longitude]
                 st.session_state.zoom = 14
-    except Exception as e:
-        st.error(f"Error de conexión con el servidor de mapas: {e}")
+    except:
+        st.error("Error de conexión con servicio de mapas.")
 
-# --- 5. VISUALIZACIÓN INTERACTIVA (EL NÚCLEO DEL SISTEMA) ---
+# --- 5. ZONA DE TRABAJO (MAPA Y PERFIL) ---
 
-col_map, col_data = st.columns([1.2, 1])
+# Columnas: Mapa (Izquierda) | Ajustes y Resultados (Derecha)
+c_mapa, c_datos = st.columns([1.5, 1])
 
-with col_map:
-    st.subheader("🗺️ Validación Geográfica de Precisión")
-    st.caption("🔍 **Instrucción Crítica:** Si el punto rojo no es exacto, **haga clic en el mapa** sobre el techo de la propiedad real. El sistema recalculará todo instantáneamente.")
+with c_mapa:
+    st.subheader("1. Validación Geográfica")
+    st.caption("Verifique que el pin rojo esté sobre la propiedad. Si no, **haga clic en el mapa** para corregir.")
     
-    # Mapa Base
-    m = folium.Map(location=st.session_state.coords, zoom_start=st.session_state.zoom, control_scale=True)
-    
-    # Capa de Satélite (Google Maps) para máxima precisión visual
+    m = folium.Map(location=st.session_state.coords, zoom_start=st.session_state.zoom)
+    # Capa Satélite (Google)
     folium.TileLayer(
-        tiles = 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-        attr = 'Google',
-        name = 'Google Satélite',
-        overlay = False,
-        control = True
+        tiles='https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+        attr='Google',
+        name='Google Satélite',
+        overlay=False
     ).add_to(m)
     
-    # Marcador y Radio de Riesgo
-    folium.Marker(
-        st.session_state.coords, 
-        popup="Ubicación Analizada", 
-        icon=folium.Icon(color="red", icon="home")
-    ).add_to(m)
+    folium.Marker(st.session_state.coords, icon=folium.Icon(color="red")).add_to(m)
+    folium.Circle(st.session_state.coords, radius=500, color="red", fill=True, opacity=0.1).add_to(m)
     
-    folium.Circle(
-        st.session_state.coords, 
-        radius=500, 
-        color="#e53935", 
-        fill=True, 
-        fill_opacity=0.1, 
-        tooltip="Radio de Análisis de Entorno (500m)"
-    ).add_to(m)
+    map_out = st_folium(m, height=500, width=None)
 
-    # Captura de interacción del usuario
-    map_output = st_folium(m, height=500, width=None)
+# Actualización por clic en mapa
+if map_out['last_clicked']:
+    st.session_state.coords = [map_out['last_clicked']['lat'], map_out['last_clicked']['lng']]
 
-# --- 6. PROCESAMIENTO DE DATOS (POST-INTERACCIÓN) ---
+# --- 6. CÁLCULO EN TIEMPO REAL ---
+lat_f, lon_f = st.session_state.coords
+dist_r, nombre_r = analizar_riesgo_geo(lat_f, lon_f)
+dolar = get_dolar_bna()
 
-# Si el usuario hizo clic en el mapa, actualizamos las coordenadas
-if map_output['last_clicked']:
-    st.session_state.coords = [map_output['last_clicked']['lat'], map_output['last_clicked']['lng']]
-    # No hacemos rerun forzoso para evitar parpadeo, calculamos con los nuevos datos
+# Lógica de Conflicto: ¿Es Premium pero está pegado a una Villa?
+# Caso emblemático: Libertador en Retiro cerca de Villa 31.
+es_premium = st.session_state.perfil_sugerido == "Premium"
+riesgo_activo = dist_r < 500
 
-# Variables finales para cálculo
-lat_final, lon_final = st.session_state.coords
-dist_riesgo, nombre_riesgo = analizar_riesgo_geo(lat_final, lon_final)
-dolar_oficial = get_dolar_bna()
+factor_ajuste = 1.0
+mensaje_ajuste = "Valor de Mercado Estándar"
 
-# Lógica de Tasación
-valor_base_m2 = get_valor_base_m2(tipo_inmueble, calidad_zona)
-factor_castigo = 0.65 if dist_riesgo < 500 else 1.0
+if riesgo_activo:
+    factor_ajuste = 0.60 # Castigo del 40% (Más severo por ser zona de contraste)
+    mensaje_ajuste = f"Castigo Severo (-40%) por proximidad a {nombre_r}"
+elif es_premium:
+    factor_ajuste = 1.10 # Plus del 10% por marca "Premium"
+    mensaje_ajuste = "Plus (+10%) por Corredor Premium / Zona Exclusiva"
 
-# Ajuste fino: Valor final
-valor_m2_final = valor_base_m2 * factor_castigo
-valor_total_usd = valor_m2_final * m2
-valor_total_ars = valor_total_usd * dolar_oficial
+# Cálculo Final
+val_base = obtener_valor_referencia(tipo_inmueble, st.session_state.perfil_sugerido)
+val_m2_final = val_base * factor_ajuste
+total_usd = val_m2_final * m2_total
+total_ars = total_usd * dolar
 
-# Rangos de negociación (Norma de tasación)
-rango_min = valor_total_usd * 0.85
-rango_max = valor_total_usd * 1.15
-
-with col_data:
-    st.subheader("📊 Informe de Valuación Técnica")
+with c_datos:
+    st.subheader("2. Perfil y Valuación")
     
-    # Alertas de Compliance
-    if dist_riesgo < 500:
-        st.markdown(f"""
-        <div class="risk-alert">
-            🚨 <b>ALERTA DE RIESGO SEVERO</b><br>
-            La propiedad se encuentra a <b>{dist_riesgo:.0f} metros</b> de un foco de riesgo ({nombre_riesgo}).<br>
-            <i>Se ha aplicado un factor de castigo del 35% sobre el valor de mercado.</i>
+    # Selector de Perfil (Con sugerencia automática)
+    perfil_final = st.select_slider(
+        "Perfil Socioeconómico Detectado",
+        options=["Baja", "Media", "Alta", "Premium"],
+        value=st.session_state.perfil_sugerido,
+        help="El sistema sugiere basado en calles clave (Libertador, Puerto Madero, etc). Ajuste si es necesario."
+    )
+    
+    if perfil_final != st.session_state.perfil_sugerido:
+        # Recalcular si el usuario cambia el slider manualmente
+        val_base = obtener_valor_referencia(tipo_inmueble, perfil_final)
+        val_m2_final = val_base * factor_ajuste
+        total_usd = val_m2_final * m2_total
+        total_ars = total_usd * dolar
+
+    st.markdown("---")
+    
+    # ALERTAS INTELIGENTES
+    if es_premium and riesgo_activo:
+        st.error(f"⚠️ **CASO COMPLEJO:** Zona Premium ({calle}) afectada por entorno inmediato ({nombre_r}). Se prioriza el riesgo sobre el valor de zona.")
+    elif es_premium:
+        st.markdown(f'<span class="premium-tag">🌟 ZONA PREMIUM DETECTADA</span>', unsafe_allow_html=True)
+        st.caption("Ubicación en Corredor de Alto Valor o Barrio Cerrado.")
+    elif riesgo_activo:
+        st.error(f"🚨 **RIESGO DE ENTORNO:** A {dist_r:.0f}m de {nombre_r}.")
+
+    # RESULTADOS NUMÉRICOS
+    st.write("")
+    c1, c2 = st.columns(2)
+    c1.metric("Valor m² (USD)", f"USD {val_m2_final:,.0f}")
+    c2.metric("Total Garantía (USD)", f"USD {total_usd:,.0f}")
+    
+    st.markdown(f"""
+        <div style="background-color:#e3f2fd; padding:15px; border-radius:10px; margin-top:10px; text-align:center;">
+            <small style="color:#555">VALOR TÉCNICO EN PESOS (BNA)</small>
+            <h2 style="color:#1565c0; margin:0">$ {total_ars:,.0f}</h2>
         </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="safe-zone">
-            ✅ <b>ENTORNO VALIDADO</b><br>
-            Propiedad fuera de radios de riesgo críticos detectados.<br>
-            Distancia mínima a foco: {dist_riesgo:.0f} metros.
-        </div>
-        """, unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
     
-    st.divider()
-    
-    # Panel de Precios
-    t1, t2 = st.tabs(["💵 Valuación", "📈 Datos Técnicos"])
-    
-    with t1:
-        st.markdown(f"### Valor de Realización Sugerido (USD)")
-        st.metric("Total USD", f"USD {valor_total_usd:,.0f}", delta=f"Rango: {rango_min:,.0f} - {rango_max:,.0f} k", delta_color="off")
-        
-        st.markdown("### Cobertura en Pesos (BNA)")
-        st.markdown(f"""
-        <div style="background: #e3f2fd; padding: 15px; border-radius: 10px; text-align: center;">
-            <h2 style="color: #1565c0; margin: 0;">$ {valor_total_ars:,.0f}</h2>
-            <small>Cotización BNA: ${dolar_oficial}</small>
-        </div>
-        """, unsafe_allow_html=True)
+    with st.expander("Ver detalle de cálculo"):
+        st.write(f"**Valor Base Matriz:** USD {val_base}")
+        st.write(f"**Ajuste Aplicado:** {mensaje_ajuste}")
+        st.write(f"**Distancia a Riesgo:** {dist_r:.0f} metros")
 
-    with t2:
-        st.write("**Desglose del Cálculo:**")
-        df_calc = pd.DataFrame({
-            "Concepto": ["Valor Base Zona", "Factor de Ajuste", "Valor m² Final", "Superficie"],
-            "Valor": [f"USD {valor_base_m2}", f"{factor_castigo*100:.0f}%", f"USD {valor_m2_final:.0f}", f"{m2} m²"]
-        })
-        st.table(df_calc)
-        
-        st.write(f"**Coordenadas GPS:** {lat_final:.6f}, {lon_final:.6f}")
-
-# --- 7. EXPORTACIÓN ---
+# --- 7. PIE DE PÁGINA ---
 st.markdown("---")
-st.caption("Gobernanza de Datos: Dólar BNA (API Tiempo Real) | Cartografía Google/OSM | Valores Referenciales Matriz 2026")
+st.caption("GERIE System v2.1 | Motor Heurístico de Zonas + Cartografía Satelital | Dólar BNA Live")
