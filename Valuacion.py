@@ -5,61 +5,38 @@ import pandas as pd
 from geopy.geocoders import Nominatim
 from streamlit_folium import st_folium
 
-# --- 1. CONFIGURACIÓN ESTRUCTURAL ---
-st.set_page_config(page_title="GERIE - Valuador Estandarizado", layout="wide")
+# --- 1. CONFIGURACIÓN Y BLINDAJE DE MEMORIA ---
+st.set_page_config(page_title="GERIE - Valuador Estable", layout="wide")
 
-# ESTILOS CSS PARA REPORTE BANCARIO
-st.markdown("""
-    <style>
-    .metric-container {background-color: #f0f2f6; border-left: 5px solid #004085; padding: 15px; border-radius: 5px;}
-    .ref-table {font-size: 0.8em; color: #666;}
-    </style>
-""", unsafe_allow_html=True)
-
+# Inicialización de la "Caja Fuerte" (Session State)
+# Si no existen estas variables, las creamos vacías. Si existen, NO SE TOCAN.
+if 'datos_valuacion' not in st.session_state:
+    st.session_state.datos_valuacion = None  # Aquí guardaremos el informe
 if 'coords' not in st.session_state:
     st.session_state.coords = [-34.6037, -58.3816]
 if 'zoom' not in st.session_state:
     st.session_state.zoom = 12
 
-# --- 2. LA "VERDAD" DEL SISTEMA (MATRIZ FIJA) ---
-# Estos valores son promedios de mercado para GBA Norte / CABA (Zona Estándar).
-# Se aplican coeficientes para ajustar por provincia o zona específica.
+# Estilos visuales
+st.markdown("""
+    <style>
+    .result-card {background-color: #e8f4f8; padding: 20px; border-radius: 10px; border-left: 6px solid #007bff;}
+    </style>
+""", unsafe_allow_html=True)
 
+# --- 2. MOTORES Y MATRICES (Valores Fijos) ---
 MATRIZ_BASE_USD_M2 = {
-    "Casa": {
-        "Premium/Country": 2100, 
-        "Muy Bueno": 1500, 
-        "Bueno/Estándar": 1150,  # Valor típico para Posadas 1538
-        "Regular/A Refaccionar": 800
-    },
-    "Departamento": {
-        "Premium/Country": 2800, 
-        "Muy Bueno": 2200, 
-        "Bueno/Estándar": 1700, 
-        "Regular/A Refaccionar": 1200
-    },
-    "Local Comercial": {
-        "Premium/Country": 3000, 
-        "Muy Bueno": 2000, 
-        "Bueno/Estándar": 1400, 
-        "Regular/A Refaccionar": 900
-    },
-    "Depósito/Galpón": {
-        "Premium/Country": 1000, 
-        "Muy Bueno": 800, 
-        "Bueno/Estándar": 600, 
-        "Regular/A Refaccionar": 400
-    }
+    "Casa": {"Premium": 2100, "Muy Bueno": 1500, "Bueno/Estándar": 1150, "A Refaccionar": 800},
+    "Departamento": {"Premium": 2800, "Muy Bueno": 2200, "Bueno/Estándar": 1700, "A Refaccionar": 1200},
+    "Local Comercial": {"Premium": 3000, "Muy Bueno": 2000, "Bueno/Estándar": 1400, "A Refaccionar": 900},
+    "Depósito/Galpón": {"Premium": 1000, "Muy Bueno": 800, "Bueno/Estándar": 600, "A Refaccionar": 400}
 }
 
-# Coeficientes de Ajuste Regional (Estabilidad Federal)
 INDICE_PROVINCIA = {
-    "CABA": 1.10, "Buenos Aires": 1.00, # GBA es la base (1.0)
-    "Córdoba": 0.90, "Santa Fe": 0.90, "Mendoza": 0.85,
-    "Neuquén": 1.05, "Río Negro": 0.90, "Resto del País": 0.75
+    "CABA": 1.10, "Buenos Aires": 1.00, "Córdoba": 0.90, "Santa Fe": 0.90, 
+    "Mendoza": 0.85, "Neuquén": 1.05, "Río Negro": 0.90, "Resto del País": 0.75
 }
 
-# --- 3. MOTORES AUXILIARES ---
 @st.cache_data(ttl=3600)
 def get_dolar_bna():
     try:
@@ -67,74 +44,74 @@ def get_dolar_bna():
         return r.json()['venta']
     except: return 1150.0
 
-# --- 4. INTERFAZ DE CARGA (CONTROL TOTAL DEL ANALISTA) ---
+# --- 3. INTERFAZ DE CARGA (SIDEBAR) ---
 with st.sidebar:
-    st.header("🎛️ Parámetros de Tasación")
-    st.info("Defina las variables para obtener el valor técnico.")
+    st.header("📝 Datos de Tasación")
     
-    with st.form("form_tasacion"):
-        # 1. UBICACIÓN
+    with st.form("form_blindado"):
         calle = st.text_input("Dirección", value="Gervasio Posadas 1538")
         localidad = st.text_input("Localidad", value="Beccar")
-        provincia = st.selectbox("Provincia", INDICE_PROVINCIA.keys())
+        provincia = st.selectbox("Provincia", list(INDICE_PROVINCIA.keys()))
         
         st.divider()
+        tipo = st.selectbox("Inmueble", list(MATRIZ_BASE_USD_M2.keys()))
+        m2 = st.number_input("M2 Totales", value=100.0)
+        calidad = st.select_slider("Calidad / Estado", options=["A Refaccionar", "Bueno/Estándar", "Muy Bueno", "Premium"], value="Bueno/Estándar")
         
-        # 2. CARACTERÍSTICAS FÍSICAS
-        tipo = st.selectbox("Tipo de Inmueble", MATRIZ_BASE_USD_M2.keys())
-        m2 = st.number_input("Superficie Total (m²)", value=100.0)
-        
-        # 3. FACTOR DE CALIDAD (CRÍTICO PARA LA PRECISIÓN)
-        st.markdown("**Calidad Constructiva / Ubicación Específica**")
-        calidad = st.select_slider(
-            "Seleccione Nivel:",
-            options=["Regular/A Refaccionar", "Bueno/Estándar", "Muy Bueno", "Premium/Country"],
-            value="Bueno/Estándar",
-            help="Estándar: Barrio abierto consolidado. Premium: Barrio Cerrado o Av. Libertador."
-        )
-        
-        btn_calcular = st.form_submit_button("CALCULAR VALOR OFICIAL")
+        # EL BOTÓN SOLO DISPARA EL CÁLCULO, NO MUESTRA NADA
+        btn_calcular = st.form_submit_button("CALCULAR Y GUARDAR")
 
-# --- 5. LÓGICA DE GEOLOCALIZACIÓN Y CÁLCULO ---
+# --- 4. LÓGICA DE PROCESAMIENTO (SOLO SI SE APRIETA EL BOTÓN) ---
 if btn_calcular:
-    # A. Geolocalización (Solo para mapa y riesgo, NO afecta precio base)
+    # A. Intentar Ubicar
     try:
-        geo = Nominatim(user_agent="gerie_stable_v1")
-        query = f"{calle}, {localidad}, {provincia}, Argentina"
-        loc = geo.geocode(query)
+        geo = Nominatim(user_agent="gerie_stable_v3")
+        loc = geo.geocode(f"{calle}, {localidad}, {provincia}, Argentina")
         if loc:
             st.session_state.coords = [loc.latitude, loc.longitude]
             st.session_state.zoom = 16
         else:
             # Fallback a localidad
-            loc_gen = geo.geocode(f"{localidad}, {provincia}, Argentina")
-            if loc_gen:
-                st.session_state.coords = [loc_gen.latitude, loc_gen.longitude]
+            loc2 = geo.geocode(f"{localidad}, {provincia}, Argentina")
+            if loc2:
+                st.session_state.coords = [loc2.latitude, loc2.longitude]
                 st.session_state.zoom = 14
-                st.warning("Dirección exacta no hallada. Mostrando centro de localidad.")
     except: pass
 
-    # B. CÁLCULO DE VALOR (MATEMÁTICA PURA, SIN CAJAS NEGRAS)
+    # B. Calcular Valores
+    base = MATRIZ_BASE_USD_M2[tipo][calidad]
+    ajuste = INDICE_PROVINCIA.get(provincia, 0.75)
+    valor_m2 = base * ajuste
+    total_usd = valor_m2 * m2
+    dolar = get_dolar_bna()
+    total_ars = total_usd * dolar
     
-    # 1. Valor de Tabla
-    valor_tabla_base = MATRIZ_BASE_USD_M2[tipo][calidad]
-    
-    # 2. Ajuste Provincial
-    factor_prov = INDICE_PROVINCIA.get(provincia, 0.75)
-    valor_m2_ajustado = valor_tabla_base * factor_prov
-    
-    # 3. Totales
-    total_usd = valor_m2_ajustado * m2
-    dolar_bna = get_dolar_bna()
-    total_ars = total_usd * dolar_bna
+    # C. GUARDAR EN LA CAJA FUERTE (SESSION STATE)
+    st.session_state.datos_valuacion = {
+        "direccion": f"{calle}, {localidad}",
+        "tipo": tipo,
+        "calidad": calidad,
+        "m2": m2,
+        "valor_m2": valor_m2,
+        "total_usd": total_usd,
+        "total_ars": total_ars,
+        "dolar": dolar
+    }
+    # Forzamos una recarga para asegurar que se muestre
+    st.rerun()
 
-    # --- 6. VISUALIZACIÓN DE RESULTADOS ---
+# --- 5. PANTALLA DE RESULTADOS (PERSISTENTE) ---
+# Esta parte se ejecuta SIEMPRE que haya datos en la memoria, 
+# sin importar si apretaste el botón o moviste el mapa.
+
+if st.session_state.datos_valuacion is not None:
+    datos = st.session_state.datos_valuacion
     
-    # COLUMNA IZQUIERDA: VALIDACIÓN VISUAL
-    c_map, c_data = st.columns([1.5, 1])
+    col_mapa, col_info = st.columns([1.5, 1])
     
-    with c_map:
-        st.subheader("📍 Ubicación del Activo")
+    with col_mapa:
+        st.subheader("📍 Validación Geográfica")
+        # El mapa usa las coordenadas guardadas en memoria
         m = folium.Map(location=st.session_state.coords, zoom_start=st.session_state.zoom)
         folium.TileLayer(
             tiles='https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
@@ -142,42 +119,44 @@ if btn_calcular:
             name='Google Satélite',
             overlay=False
         ).add_to(m)
-        
         folium.Marker(st.session_state.coords, icon=folium.Icon(color="red", icon="home")).add_to(m)
-        st_folium(m, height=450)
-        st.caption("*Verifique visualmente la calidad del entorno con la vista satelital.*")
-
-    # COLUMNA DERECHA: INFORME FINANCIERO
-    with c_data:
-        st.subheader("📑 Informe de Valuación")
         
+        # Renderizamos el mapa
+        out = st_folium(m, height=500, width=None)
+        
+        # Si el usuario hace clic para corregir el mapa:
+        if out['last_clicked']:
+            st.session_state.coords = [out['last_clicked']['lat'], out['last_clicked']['lng']]
+            st.rerun() # Recargamos para centrar el mapa en el clic
+            
+    with col_info:
+        st.subheader("📑 Resultados de Valuación")
+        
+        # Tarjeta de Resultados (Persistente)
         st.markdown(f"""
-        <div class="metric-container">
-            <h3 style="margin:0; color:#555;">VALOR DE GARANTÍA (USD)</h3>
-            <h1 style="margin:0; color:#004085;">USD {total_usd:,.0f}</h1>
-            <p style="margin:0;"><b>{valor_m2_ajustado:,.0f} USD/m²</b> (Ajustado)</p>
+        <div class="result-card">
+            <h4 style="margin:0; color:#555;">VALOR TÉCNICO TOTAL</h4>
+            <h1 style="color:#0056b3; margin:5px 0;">USD {datos['total_usd']:,.0f}</h1>
+            <p><b>{datos['valor_m2']:,.0f} USD/m²</b> ({datos['calidad']})</p>
+            <hr>
+            <h3 style="color:#333;">$ {datos['total_ars']:,.0f}</h3>
+            <small>Pesos Arg (BNA Venta: ${datos['dolar']})</small>
         </div>
         """, unsafe_allow_html=True)
         
         st.write("")
-        st.markdown(f"**Valor de Cobertura en Pesos (BNA ${dolar_bna}):**")
-        st.markdown(f"### $ {total_ars:,.0f}")
-        
-        st.divider()
-        st.write("🔍 **Desglose del Algoritmo:**")
-        
-        df_desglose = pd.DataFrame({
-            "Variable": ["Valor Base Matriz", "Categoría", "Ajuste Provincial", "Superficie"],
-            "Detalle": [f"USD {valor_tabla_base}", calidad, f"{factor_prov*100:.0f}% ({provincia})", f"{m2} m²"]
+        st.markdown("### Detalles:")
+        df = pd.DataFrame({
+            "Variable": ["Ubicación", "Tipo", "Superficie", "Coeficiente Prov."],
+            "Dato": [datos['direccion'], datos['tipo'], f"{datos['m2']} m²", provincia]
         })
-        st.table(df_desglose)
+        st.table(df)
         
-        st.info("Este valor es técnico y estable. Solo variará si usted cambia la categoría de 'Bueno' a 'Premium'.")
+        if st.button("LIMPIAR / NUEVA BÚSQUEDA"):
+            st.session_state.datos_valuacion = None
+            st.rerun()
 
 else:
-    st.info("Ingrese los datos en el panel lateral para iniciar la valuación.")
-
-# --- 7. TABLA DE REFERENCIA (TRANSPARENCIA TOTAL) ---
-with st.expander("Ver Matriz de Precios Base del Sistema (USD/m²)"):
-    st.write("Estos son los valores fijos que utiliza el sistema antes de aplicar el coeficiente provincial.")
-    st.dataframe(pd.DataFrame(MATRIZ_BASE_USD_M2))
+    # Mensaje de bienvenida si no hay datos cargados
+    st.info("👈 Complete el formulario en el menú lateral y presione 'CALCULAR Y GUARDAR' para iniciar.")
+    st.write("El sistema mantendrá los resultados en pantalla hasta que realice una nueva búsqueda.")
